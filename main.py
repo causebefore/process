@@ -21,15 +21,109 @@ import shutil
 
 PATH = os.getcwd()
 import pandas as pd
+import struct
+import serial.tools.list_ports
+from pymodbus.client.sync import ModbusSerialClient
 
+def read_modbus_rtu(port, baudrate, stopbits, parity, bytesize, slave_id, addr, count):
+    client = ModbusSerialClient(method='rtu', port=port, baudrate=baudrate, stopbits=stopbits, parity=parity, bytesize=bytesize)
+    client.connect()
 
-class control:
+    result = client.read_holding_registers(addr, count, unit=slave_id)
+    if result.isError():
+        print('读取失败')
+    else:
+        print(result.registers)
+
+    client.close()
+
+class SerialPort:
     def __init__(self):
-        pass
+        self.ser = serial.Serial()
+        self.ser.port = ''
+        self.ser.baudrate = 115200
+        self.ser.bytesize = 8
+        self.ser.stopbits = 1
+        self.ser.timeout = 10
+        self.ser.parity = "N"
+        self.data_queue = queue.Queue()
 
-    # def btn_relief_valve_click(self):
-    #     self.btn_relief_valve.config(relief="sunken")
+    def get_port(self):
+        port_list = list(serial.tools.list_ports.comports())
+        if len(port_list) == 0:
+            print('无可用串口')
+        else:
+            for i in range(0, len(port_list)):
+                print(port_list[i])
+        return port_list
 
+    def port_open_recv(self):
+        self.ser.open()
+        if self.ser.isOpen():
+            print("串口打开成功！")
+        else:
+            print("串口打开失败！")
+
+    def set_port(self, port):
+        self.ser.port = port
+
+    def send_data(self, data):
+        if self.ser.isOpen():
+            for i in data:
+                self.ser.write(struct.pack('B', i))
+        else:
+            print("发送失败，串口未打开！")
+
+    def res_thread(self):
+        while True:
+            if self.ser.isOpen():
+                data = self.ser.read(1)
+                if data:
+                    self.data_queue.put(data)
+            else:
+                break
+
+    def start_res(self):
+        thread = threading.Thread(target=self.res_thread)
+        thread.start()
+        thread.isDaemon = True
+
+    def stop_res(self):
+        thread = threading.Thread(target=self.res_thread)
+        thread.stop()
+
+    def get_data(self):
+        return self.data_queue.get()
+
+    def close_port(self):
+        self.ser.close()
+
+    def crc16(self, data):
+        crc = 0xFFFF
+        for i in data:
+            crc = crc ^ i
+            for j in range(0, 8):
+                if crc & 0x0001:
+                    crc = crc >> 1
+                    crc = crc ^ 0xA001
+                else:
+                    crc = crc >> 1
+        return crc
+
+
+    def read_modbus(self, addr, reg, num):
+        data = [addr, 0x03, reg >> 8, reg & 0xff, num >> 8, num & 0xff]
+        crc = self.crc16(data)
+        data.append(crc >> 8)
+        data.append(crc & 0xff)
+        self.send_data(data)
+        time.sleep(0.1)
+        data = self.get_data()
+        print(data)
+        reg = []
+        for i in range(0, num):
+            reg.append(data[i * 2 + 3] << 8 | data[i * 2 + 4])
+        return reg
 
 class Widgets(tk.Tk):
     """
@@ -86,6 +180,9 @@ class Widgets(tk.Tk):
         self.ax.set_ylim(0, 10)
 
         self.canvas.get_tk_widget().grid(row=1, column=1, sticky=tk.NW)  # 显示位置
+        thread = threading.Thread(target=self.port_search)
+        thread.start()
+        thread.isDaemon = True
 
     def device_frame_start(self):
         """
@@ -97,7 +194,7 @@ class Widgets(tk.Tk):
         self.gbDevConnect.grid(row=0, column=0, padx=2, sticky=tk.NW)
         # Device Information Frame
         tk.Label(self.gbDevConnect, text="串口号:", font=self.font_1).grid(row=0, column=0, sticky=tk.NW)
-        self.cmbDevType = ttk.Combobox(self.gbDevConnect, width=5, font=self.font_1, state="readonly")
+        self.cmbDevType = ttk.Combobox(self.gbDevConnect, width=7, font=self.font_1, state="readonly")
         self.cmbDevType.grid(row=0, column=1, sticky=tk.NW)
         self.cmbDevType["value"] = ["com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "com10"]
         self.cmbDevType.current(0)
@@ -216,6 +313,12 @@ class Widgets(tk.Tk):
 
         return '%1.0f' % (x * 60)
 
+    def port_search(self):
+        while True:
+            self.port_list = list(serial.tools.list_ports.comports())
+            self.cmbDevType["value"] = [i.device for i in self.port_list]
+            time.sleep(0.5)
+
     def start_thread(self):
         """
         启动表格线程
@@ -227,7 +330,7 @@ class Widgets(tk.Tk):
         self.shelf_file = os.path.join(self.folder_name, 'shelf')
 
         self.thread = threading.Thread(target=self.pressure_frame_thread)
-        self.thread.daemon = True
+        self.thread.isDaemon = True
         self.thread.start()
 
     def pressure_frame_thread(self):
@@ -346,7 +449,6 @@ class Widgets(tk.Tk):
         self.line.set_xdata(self.x)
         self.line.set_ydata(self.y)
         self.fig.canvas.draw_idle()
-
 
     def btn_write_click(self):
 
