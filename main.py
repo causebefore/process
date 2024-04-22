@@ -23,10 +23,12 @@ PATH = os.getcwd()
 import pandas as pd
 import struct
 import serial.tools.list_ports
-from pymodbus.client.sync import ModbusSerialClient
+from pymodbus.client import ModbusSerialClient
+
 
 def read_modbus_rtu(port, baudrate, stopbits, parity, bytesize, slave_id, addr, count):
-    client = ModbusSerialClient(method='rtu', port=port, baudrate=baudrate, stopbits=stopbits, parity=parity, bytesize=bytesize)
+    client = ModbusSerialClient(method='rtu', port=port, baudrate=baudrate, stopbits=stopbits, parity=parity,
+                                bytesize=bytesize)
     client.connect()
 
     result = client.read_holding_registers(addr, count, unit=slave_id)
@@ -36,6 +38,7 @@ def read_modbus_rtu(port, baudrate, stopbits, parity, bytesize, slave_id, addr, 
         print(result.registers)
 
     client.close()
+
 
 class SerialPort:
     def __init__(self):
@@ -110,7 +113,6 @@ class SerialPort:
                     crc = crc >> 1
         return crc
 
-
     def read_modbus(self, addr, reg, num):
         data = [addr, 0x03, reg >> 8, reg & 0xff, num >> 8, num & 0xff]
         crc = self.crc16(data)
@@ -124,6 +126,7 @@ class SerialPort:
         for i in range(0, num):
             reg.append(data[i * 2 + 3] << 8 | data[i * 2 + 4])
         return reg
+
 
 class Widgets(tk.Tk):
     """
@@ -237,6 +240,7 @@ class Widgets(tk.Tk):
 
     def btn_frame_start(self):
         self.gbBtn = tk.LabelFrame(self._dev_frame, height=100, width=200, text="按钮")
+        # TODO
         # self.gbBtn.grid_propagate(True)
         # self.gbBtn.grid(row=0, column=2, sticky=tk.NW)
 
@@ -349,14 +353,7 @@ class Widgets(tk.Tk):
             self.line.set_ydata(self.y)
             self.fig.canvas.draw_idle()
             # 更新图形
-            try:
-                with shelve.open(self.shelf_file) as s:
-                    s['Pressure'] = self.y
-                    s['Time'] = time.strftime("%Y-%m-%d %H:%M:%S", self.time)
-            except Exception as e:
-                logger.error(e)
-                messagebox.showerror("错误", "写入数据失败")
-                self.btn_open_click()
+
             time.sleep(0.3)
 
     def call_move(self, event):
@@ -433,6 +430,7 @@ class Widgets(tk.Tk):
         if folder_name == '':
             messagebox.showerror("错误", "请选择文件")
             return
+
         with shelve.open(shelf_file) as s:
             self.Tank_ID.delete(0, tk.END)
             self.Tank_ID.insert(0, s['Tank_ID'])
@@ -445,13 +443,15 @@ class Widgets(tk.Tk):
             self.Pressure_val3.set(s['Pressure_val3'])
             self.Pressure_val4.set(s['Pressure_val4'])
             pressure = s['Pressure']
-
-        self.line.set_xdata(self.x)
-        self.line.set_ydata(self.y)
+        self.ax.clear()
+        self.ax.plot(pressure)
         self.fig.canvas.draw_idle()
 
     def btn_write_click(self):
+        """
 
+        :return:
+        """
         if self.Tank_ID.get() == '' or self.Test_ID.get() == '' or self.Temp_Val.get() == '' or self.Pressure_val1.get() == '' or self.Pressure_val2.get() == '' or self.Pressure_val3.get() == '' or self.Pressure_val4.get() == '':
             messagebox.showerror("错误", "请输入完整信息")
             return
@@ -466,7 +466,8 @@ class Widgets(tk.Tk):
             s['Pressure_val2'] = self.Pressure_val2.get()
             s['Pressure_val3'] = self.Pressure_val3.get()
             s['Pressure_val4'] = self.Pressure_val4.get()
-
+        with zipfile.ZipFile(folder_name + '.zip', 'w') as z:
+            z.write(shelf_file)
     def create_file(self, filename):
         with open(filename, 'a', newline='') as f:
             pass
@@ -481,6 +482,16 @@ class Widgets(tk.Tk):
         if self.is_open:
             self.is_open = False
             self.strvDevCtrl.set("打开")
+            try:
+                with shelve.open(self.shelf_file) as s:
+                    s['Pressure'] = self.y
+                    s['Time'] = time.strftime("%Y-%m-%d %H:%M:%S", self.time)
+                with zipfile.ZipFile(self.shelf_file + '.zip', 'w') as z:
+                     z.write(self.shelf_file)
+            except Exception as e:
+                logger.error(e)
+                messagebox.showerror("错误", "写入数据失败")
+                self.btn_open_click()
         else:
             self.is_open = True
             self.strvDevCtrl.set("关闭")
