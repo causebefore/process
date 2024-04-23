@@ -1,43 +1,22 @@
 # -*- coding: UTF-8 -*-
 import queue
-import sys
 import threading
 import time
 import tkinter as tk
-from datetime import datetime, timedelta
 from tkinter import ttk, messagebox, font, filedialog
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from loguru import logger
 import os
-import serial
 import matplotlib.pyplot as plt
-import numpy as np
 import random
 import shelve
 import zipfile
-from matplotlib.dates import DateFormatter
-from matplotlib.ticker import FuncFormatter
-import shutil
 
 PATH = os.getcwd()
 import pandas as pd
 import struct
 import serial.tools.list_ports
 from pymodbus.client import ModbusSerialClient
-
-
-def read_modbus_rtu(port, baudrate, stopbits, parity, bytesize, slave_id, addr, count):
-    client = ModbusSerialClient(method='rtu', port=port, baudrate=baudrate, stopbits=stopbits, parity=parity,
-                                bytesize=bytesize)
-    client.connect()
-
-    result = client.read_holding_registers(addr, count, unit=slave_id)
-    if result.isError():
-        print('读取失败')
-    else:
-        print(result.registers)
-
-    client.close()
 
 
 class SerialPort:
@@ -60,75 +39,120 @@ class SerialPort:
                 print(port_list[i])
         return port_list
 
-    def port_open_recv(self):
-        self.ser.open()
-        if self.ser.isOpen():
-            print("串口打开成功！")
+    def connect(self, port, baudrate, stopbits, parity, bytesize):
+        self.client = ModbusSerialClient(method='rtu', port=port, baudrate=baudrate, stopbits=stopbits, parity=parity,
+                                         bytesize=bytesize)
+        self.client.connect()
+
+    def disconnect(self):
+        self.client.close()
+
+    def start_modbus_thread(self):
+        self.thread = threading.Thread(target=self.read_modbus_rtu_thread)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def read_modbus_rtu_thread(self, slave_id, addr, count):
+
+        result = self.client.read_holding_registers(addr, count, unit=slave_id)
+        if result.isError():
+            print("Error: ", result)
         else:
-            print("串口打开失败！")
-
-    def set_port(self, port):
-        self.ser.port = port
-
-    def send_data(self, data):
-        if self.ser.isOpen():
-            for i in data:
-                self.ser.write(struct.pack('B', i))
-        else:
-            print("发送失败，串口未打开！")
-
-    def res_thread(self):
-        while True:
-            if self.ser.isOpen():
-                data = self.ser.read(1)
-                if data:
-                    self.data_queue.put(data)
-            else:
-                break
-
-    def start_res(self):
-        thread = threading.Thread(target=self.res_thread)
-        thread.start()
-        thread.isDaemon = True
-
-    def stop_res(self):
-        thread = threading.Thread(target=self.res_thread)
-        thread.stop()
+            print("Read: ", result.registers)
+            self.data_queue.put(result.registers)
 
     def get_data(self):
         return self.data_queue.get()
 
-    def close_port(self):
-        self.ser.close()
 
-    def crc16(self, data):
-        crc = 0xFFFF
-        for i in data:
-            crc = crc ^ i
-            for j in range(0, 8):
-                if crc & 0x0001:
-                    crc = crc >> 1
-                    crc = crc ^ 0xA001
-                else:
-                    crc = crc >> 1
-        return crc
+class MouseBinding:
+    def __init__(self, ax,fig):
+        self.ax = ax
+        self.fig = fig
+        print('init')
+        self.scroll = self.ax.figure.canvas.mpl_connect('scroll_event', self.call_scroll)
+        self.cidpress = self.ax.figure.canvas.mpl_connect('button_press_event', self.on_press)
+        self.cidrelease = self.ax.figure.canvas.mpl_connect('button_release_event', self.on_release)
+        self.cidmotion = self.ax.figure.canvas.mpl_connect('motion_notify_event', self.on_motion)
 
-    def read_modbus(self, addr, reg, num):
-        data = [addr, 0x03, reg >> 8, reg & 0xff, num >> 8, num & 0xff]
-        crc = self.crc16(data)
-        data.append(crc >> 8)
-        data.append(crc & 0xff)
-        self.send_data(data)
-        time.sleep(0.1)
-        data = self.get_data()
-        print(data)
-        reg = []
-        for i in range(0, num):
-            reg.append(data[i * 2 + 3] << 8 | data[i * 2 + 4])
-        return reg
+    def on_press(self, event):
+        print('press', event)
+        self.call_move(event)
+
+    def on_release(self, event):
+        print('release', event)
+        self.call_move(event)
+
+    def on_motion(self, event):
+        print('motion', event)
+        self.call_move(event)
+
+    def call_move(self, event):
+        """
+
+        :param event:
+        :return:
+        """
+        print('move', event)
+        if event.name == 'button_press_event':
+            axtemp = event.inaxes
+            if axtemp and event.button == 1:
+                self.mPress = True
+                self.start_x = event.xdata
+                self.start_y = event.ydata
+        elif event.name == 'button_release_event':
+            axtemp = event.inaxes
+            if axtemp and event.button == 1:
+                self.mPress = False
+        elif event.name == 'motion_notify_event':
+            axtemp = event.inaxes
+            if axtemp and event.button == 1 and self.mPress:
+                x_min, x_max = axtemp.get_xlim()
+                y_min, y_max = axtemp.get_ylim()
+                w = x_max - x_min
+                h = y_max - y_min
+                # 移动
+                mx = event.xdata - self.start_x
+                my = event.ydata - self.start_y
+                # 注意这里， -mx,  因为下一次 motion事件的坐标，已经是在本次做了移动之后的坐标系了，所以要体现出来
+                # start_x=event.xdata-mx  start_x=event.xdata-(event.xdata-start_x)=start_x, 没必要再赋值了
+                # start_y=event.ydata-my
+                axtemp.set(xlim=(x_min - mx, x_min - mx + w))
+                axtemp.set(ylim=(y_min - my, y_min - my + h))
+                self.fig.canvas.draw_idle()  # 绘图动作实时反映在图像上
+        return
+
+    def call_scroll(self, event):
+        """
+
+        :param event:
+        """
+        print('scroll', event)
+        axtemp = event.inaxes
+        # 计算放大缩小后， xlim 和ylim
+        if axtemp:
+            x_min, x_max = axtemp.get_xlim()
+            y_min, y_max = axtemp.get_ylim()
+            w = x_max - x_min
+            h = y_max - y_min
+            curx = event.xdata
+            cury = event.ydata
+            curXposition = (curx - x_min) / w
+            curYposition = (cury - y_min) / h
+            if event.button == 'down':
+                w *= 1.1
+                h *= 1.1
+            elif event.button == 'up':
+                w /= 1.1
+                h /= 1.1
+            newx = curx - w * curXposition
+            newy = cury - h * curYposition
+            axtemp.set(xlim=(newx, newx + w))
+            axtemp.set(ylim=(newy, newy + h))
+            self.fig.canvas.draw_idle()  # 绘图动作实时反映在图像上
 
 
-class Widgets(tk.Tk):
+class Widgets(tk.Tk,MouseBinding):
     """
     1. 该类继承了tk.Tk类，因此可以直接使用Tk类的方法
     """
@@ -142,50 +166,56 @@ class Widgets(tk.Tk):
         self.thread = None
         self.process_data = []
         self.title("串口调试助手")
-        self.geometry("1500x800")
+        self.geometry("1600x1000")
         self.resizable(False, False)
         self.open_time = time.localtime()
         self.data_queue = queue.Queue()
-        tk.Tk.protocol(self, 'WM_DELETE_WINDOW', self.quit)
+        self.x = []  # x轴数据
+        self.y = []
         self.is_open = False
-        self._dev_frame = tk.Frame(self)
-        self._dev_frame.grid(row=0, column=0, padx=1, pady=1, sticky=tk.NW)
         self.font_1 = font.Font(family="bold", size=30)
-        self.font_2 = font.Font(family="bold", size=30)
+        self.font_2 = font.Font(family="bold", size=20)
+        self.generate_widgets()
+        MouseBinding.__init__(self,self.ax,self.fig)
+    def generate_widgets(self):
+        """
+        生成窗口部件
+        """
+        tk.Tk.protocol(self, 'WM_DELETE_WINDOW', self.quit)
+        self._dev_frame = tk.Frame(self)
+        self._dev_frame.grid(row=0, column=0, sticky=tk.NW)
+        self.graph_frame_start()
         self.device_frame_start()
         self.copyright_frame_start()
         self.number_frame_start()
-        self.graph_frame_start()
         self.data_frame_start()
         self.btn_frame_start()
+        self.table_frame_start()
+
+    def table_frame_start(self):
+        """
+
+        """
         self.mPress = False
         self.start_x = 0
         self.start_y = 0
-        self.fig, self.ax = plt.subplots(figsize=(15, 4), dpi=80)  # 创建一个图形和一个坐标轴
+        self.fig, self.ax = plt.subplots(figsize=(20, 8), dpi=80)  # 创建一个图形和一个坐标轴
 
-        self.ax.grid(True)  # 显示网格
-        self.fig.canvas.mpl_connect('scroll_event', self.call_scroll)  # 绑定鼠标滚轮事件
-        self.fig.canvas.mpl_connect('button_press_event', self.call_move)  # 绑定鼠标按下事件
-        self.fig.canvas.mpl_connect('button_release_event', self.call_move)  # 绑定鼠标松开事件
-        self.fig.canvas.mpl_connect('motion_notify_event', self.call_move)  # 绑定鼠标移动事件
 
-        self.x = []  # x轴数据
-        self.y = []
+        self.fig.subplots_adjust(left=0.15, right=0.99, bottom=0.1, top=0.95, wspace=0.2, hspace=0.2)
+
         self.line, = self.ax.plot(self.x, self.y)
+        self.ax.grid(True)  # 显示网格
         self.ax.set_title('Pressure vs Time')
         self.ax.set_xlabel('Time (s)')
         self.ax.set_ylabel('Pressure (Pa)')
-        # 将图形添加到tkinter窗口
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.gbGraph)  # A tk.DrawingArea.
-        self.canvas.draw()  # 显示图形
         self.ax.fill_between(self.x, self.y, 100, color='white')
         self.ax.set_xlim(0, 150)
         self.ax.set_ylim(0, 10)
-
-        self.canvas.get_tk_widget().grid(row=1, column=1, sticky=tk.NW)  # 显示位置
-        thread = threading.Thread(target=self.port_search)
-        thread.start()
-        thread.isDaemon = True
+        # 将图形添加到tkinter窗口
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.gbGraph)  # A tk.DrawingArea.
+        self.canvas.draw()  # 显示图形
+        self.canvas.get_tk_widget().grid(row=2, column=2, sticky=tk.NW)  # 显示位置
 
     def device_frame_start(self):
         """
@@ -214,7 +244,7 @@ class Widgets(tk.Tk):
         # CopyRight Frame
         self.gbDevCopyRight = tk.LabelFrame(self._dev_frame, height=100, width=200, text="版权信息")
         self.gbDevCopyRight.grid_propagate(True)
-        self.gbDevCopyRight.grid(row=1, column=0, padx=2, sticky=tk.NW)
+        # self.gbDevCopyRight.grid(row=1, column=0, padx=2, sticky=tk.NW)
         tk.Label(self.gbDevCopyRight, anchor=tk.NW, text="Author: Liu Bingqian").grid(row=2, column=0, sticky=tk.NW)
         tk.Label(self.gbDevCopyRight, anchor=tk.NW, text="Email: lbq08@foxmail.com").grid(row=3, column=0, sticky=tk.NW)
         tk.Label(self.gbDevCopyRight, anchor=tk.NW, text="Version: 1.0.6").grid(row=4, column=0, sticky=tk.NW)
@@ -224,21 +254,28 @@ class Widgets(tk.Tk):
         self.gettime()
 
     def data_frame_start(self):
+        """
+
+        """
         self.gbData = tk.LabelFrame(self._dev_frame, text="实时值")
         self.gbData.grid_propagate(True)
-        self.gbData.grid(row=2, column=0, sticky=tk.NW)
-        self.IntVarpressure = tk.IntVar()
+        self.gbData.grid(row=0, column=2, sticky=tk.NW)
+        self.IntVarpressure = tk.DoubleVar()
         self.IntVarpressure.set(0)
         tk.Label(self.gbData, anchor=tk.NW, text="压力值:", font=self.font_1).grid(row=0, column=0, sticky=tk.NW)
-        tk.Label(self.gbData, anchor=tk.NW, textvariable=self.IntVarpressure, font=self.font_1).grid(row=0, column=1,
-                                                                                                     sticky=tk.NW)
-        # self.IntVartemp = tk.IntVar()
+        tk.Label(self.gbData, anchor=tk.NW, textvariable=self.IntVarpressure, width=3, font=self.font_1).grid(row=0,
+                                                                                                              column=1,
+                                                                                                              sticky=tk.NW)
+        # self.IntVartemp = tk.DoubleVar()
         # self.IntVartemp.set(0)
         # tk.Label(self.gbData, anchor=tk.NW, text="温度值:", font=self.font_1).grid(row=1, column=0, sticky=tk.NW)
         # tk.Label(self.gbData, anchor=tk.NW, textvariable=self.IntVartemp, font=self.font_1).grid(row=1, column=1,
         #                                                                                          sticky=tk.NW)
 
     def btn_frame_start(self):
+        """
+
+        """
         self.gbBtn = tk.LabelFrame(self._dev_frame, height=100, width=200, text="按钮")
         # TODO
         # self.gbBtn.grid_propagate(True)
@@ -264,52 +301,70 @@ class Widgets(tk.Tk):
         self.btnPressureWaterCtrl.grid(row=2, column=1, sticky=tk.E)
 
     def number_frame_start(self):
+        """
+
+        """
         self.gbNumber = tk.LabelFrame(self._dev_frame, height=100, width=200, text="编号输入")
         self.gbNumber.grid_propagate(True)
         self.gbNumber.grid(row=0, column=1, sticky=tk.NW)
         # columnspan=2, rowspan=2,
-        tk.Label(self.gbNumber, anchor=tk.W, text="钢瓶编号:", font=self.font_1).grid(row=0, column=0, sticky=tk.W)
-        self.Tank_ID = tk.Entry(self.gbNumber, width=10, font=self.font_1)
-        self.Tank_ID.grid(row=0, column=1, padx=2, sticky=tk.NW)
+        self.Process_Val = tk.DoubleVar()
+        self.Test_ID = tk.StringVar()
+        self.Temp_val = tk.DoubleVar()
+        self.Tank_ID1 = tk.StringVar()
+        self.Tank_ID2 = tk.StringVar()
+        self.Tank_ID3 = tk.StringVar()
+        self.Tank_ID4 = tk.StringVar()
+        self.Holding_time = tk.DoubleVar()
+        tk.Label(self.gbNumber, anchor=tk.W, text="实验压力:", font=self.font_1).grid(row=0, column=0, sticky=tk.W)
+        self.Process_val_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Process_Val)
+        self.Process_val_entry.grid(row=0, column=1, padx=2, sticky=tk.NW)
         tk.Label(self.gbNumber, anchor=tk.W, text="记录编号:", font=self.font_1).grid(row=1, column=0, sticky=tk.W)
-        self.Test_ID = tk.Entry(self.gbNumber, width=10, font=self.font_1)
-        self.Test_ID.grid(row=1, column=1, padx=2, sticky=tk.NW)
+        self.Test_ID_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Test_ID)
+        self.Test_ID_entry.grid(row=1, column=1, padx=2, sticky=tk.NW)
         tk.Label(self.gbNumber, anchor=tk.W, text="温度值:", font=self.font_1).grid(row=2, column=0, sticky=tk.W)
-        self.Temp_Val = tk.Entry(self.gbNumber, width=10, font=self.font_1)
-        self.Temp_Val.grid(row=2, column=1, padx=2, sticky=tk.NW)
-        self.Pressure_val1 = tk.IntVar()
-        self.Pressure_val2 = tk.IntVar()
-        self.Pressure_val3 = tk.IntVar()
-        self.Pressure_val4 = tk.IntVar()
-        tk.Label(self.gbNumber, anchor=tk.W, text="实验压力1:", font=self.font_1).grid(row=0, column=2, sticky=tk.W)
-        self.Pressure_val1_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Pressure_val1)
+        self.Temp_val_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Temp_val)
+        self.Temp_val_entry.grid(row=2, column=1, padx=2, sticky=tk.NW)
+        tk.Label(self.gbNumber, anchor=tk.W, text="钢瓶编号1:", font=self.font_1).grid(row=0, column=2, sticky=tk.W)
+        self.Pressure_val1_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Tank_ID1)
         self.Pressure_val1_entry.grid(row=0, column=3, padx=2, sticky=tk.NW)
-        tk.Label(self.gbNumber, anchor=tk.W, text="实验压力2:", font=self.font_1).grid(row=1, column=2, sticky=tk.W)
-        self.Pressure_val2_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Pressure_val2)
+        tk.Label(self.gbNumber, anchor=tk.W, text="钢瓶编号2:", font=self.font_1).grid(row=1, column=2, sticky=tk.W)
+        self.Pressure_val2_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Tank_ID2)
         self.Pressure_val2_entry.grid(row=1, column=3, padx=2, sticky=tk.NW)
-        tk.Label(self.gbNumber, anchor=tk.W, text="实验压力3:", font=self.font_1).grid(row=2, column=2, sticky=tk.W)
-        self.Pressure_val3_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Pressure_val3)
+        tk.Label(self.gbNumber, anchor=tk.W, text="钢瓶编号3:", font=self.font_1).grid(row=2, column=2, sticky=tk.W)
+        self.Pressure_val3_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Tank_ID3)
         self.Pressure_val3_entry.grid(row=2, column=3, padx=2, sticky=tk.NW)
-        tk.Label(self.gbNumber, anchor=tk.W, text="实验压力4:", font=self.font_1).grid(row=3, column=2, sticky=tk.W)
-        self.Pressure_val4_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Pressure_val4)
+        tk.Label(self.gbNumber, anchor=tk.W, text="钢瓶编号4:", font=self.font_1).grid(row=3, column=2, sticky=tk.W)
+        self.Pressure_val4_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Tank_ID4)
         self.Pressure_val4_entry.grid(row=3, column=3, padx=2, sticky=tk.NW)
+        tk.Label(self.gbNumber, anchor=tk.W, text="保压时间:", font=self.font_1).grid(row=4, column=2, sticky=tk.W)
+        self.Holding_time_entry = tk.Entry(self.gbNumber, width=10, font=self.font_1, textvariable=self.Holding_time)
+        self.Holding_time_entry.grid(row=4, column=3, padx=2, sticky=tk.NW)
         # ----------------------------------------------------------------
-        self.btnWriteCtrl = tk.Button(self.gbNumber, text='写入', font=self.font_1,
+        self.btnWriteCtrl = tk.Button(self.gbNumber, text='写入文件', font=self.font_1,
                                       command=self.btn_write_click)
         self.btnWriteCtrl.grid(row=3, column=0, sticky=tk.NW)
-        self.btnReadCtrl = tk.Button(self.gbNumber, text='读取', font=self.font_1,
+        self.btnReadCtrl = tk.Button(self.gbNumber, text='读取文件', font=self.font_1,
                                      command=self.btn_read_click)
         self.btnReadCtrl.grid(row=3, column=1, sticky=tk.NW)
+        self.btnSaveCtrl = tk.Button(self.gbNumber, text='保存图片', font=self.font_1,
+                                     command=self.btn_save_click)
+        self.btnSaveCtrl.grid(row=4, column=0, sticky=tk.NW)
 
     def graph_frame_start(self):
+        """
+
+        """
         self.gbGraph = tk.LabelFrame(self._dev_frame, text="曲线图")
         self.gbGraph.grid_propagate(True)
-        self.gbGraph.grid(row=1, column=1, rowspan=2, columnspan=3, sticky=tk.NSEW)
+        self.gbGraph.grid(row=1, column=0, rowspan=3, columnspan=3, sticky=tk.NSEW)
 
     def gettime(self):
+        """
+
+        """
         self.time = time.localtime()
         self.strvTime.set("Time: " + time.strftime("%Y-%m-%d %H:%M:%S", self.time))
-
         self.after(1000, self.gettime)
 
     def to_minutes(self, x, pos):
@@ -317,25 +372,19 @@ class Widgets(tk.Tk):
 
         return '%1.0f' % (x * 60)
 
-    def port_search(self):
-        while True:
-            self.port_list = list(serial.tools.list_ports.comports())
-            self.cmbDevType["value"] = [i.device for i in self.port_list]
-            time.sleep(0.5)
-
     def start_thread(self):
         """
         启动表格线程
         """
 
-        self.folder_name = filedialog.askdirectory() + "/" + time.strftime("%Y%m%d_%H%M%S", self.open_time)
-        if not os.path.exists(self.folder_name):
-            os.mkdir(self.folder_name)
-        self.shelf_file = os.path.join(self.folder_name, 'shelf')
-
         self.thread = threading.Thread(target=self.pressure_frame_thread)
-        self.thread.isDaemon = True
+        self.thread.daemon = True
         self.thread.start()
+        print("start")
+
+    def add_text_outside_axes(self, x, y, text):
+        self.fig.text(x, y, text, fontsize=12, transform=self.fig.transFigure)
+        self.fig.canvas.draw()
 
     def pressure_frame_thread(self):
         """
@@ -344,7 +393,6 @@ class Widgets(tk.Tk):
         # 获取压力数据并更新图形
         while True:
             if not self.is_open:
-                print("Pressure")
                 break
             pressure = self.get_pressure()  # 获取压力数据
             self.y.append(pressure)
@@ -353,76 +401,20 @@ class Widgets(tk.Tk):
             self.line.set_ydata(self.y)
             self.fig.canvas.draw_idle()
             # 更新图形
-
-            time.sleep(0.3)
-
-    def call_move(self, event):
-        """
-
-        :param event:
-        :return:
-        """
-        # print(mPress)
-        if event.name == 'button_press_event':
-            axtemp = event.inaxes
-            if axtemp and event.button == 1:
-                self.mPress = True
-                self.start_x = event.xdata
-                self.start_y = event.ydata
-        elif event.name == 'button_release_event':
-            axtemp = event.inaxes
-            if axtemp and event.button == 1:
-                self.mPress = False
-        elif event.name == 'motion_notify_event':
-            axtemp = event.inaxes
-            if axtemp and event.button == 1 and self.mPress:
-                x_min, x_max = axtemp.get_xlim()
-                y_min, y_max = axtemp.get_ylim()
-                w = x_max - x_min
-                h = y_max - y_min
-                # 移动
-                mx = event.xdata - self.start_x
-                my = event.ydata - self.start_y
-                # 注意这里， -mx,  因为下一次 motion事件的坐标，已经是在本次做了移动之后的坐标系了，所以要体现出来
-                # start_x=event.xdata-mx  start_x=event.xdata-(event.xdata-start_x)=start_x, 没必要再赋值了
-                # start_y=event.ydata-my
-                # print(mx,my,x_min,y_min,w,h)
-                axtemp.set(xlim=(x_min - mx, x_min - mx + w))
-                axtemp.set(ylim=(y_min - my, y_min - my + h))
-                self.fig.canvas.draw_idle()  # 绘图动作实时反映在图像上
-        return
-
-    def call_scroll(self, event):
-        """
-
-        :param event:
-        """
-        axtemp = event.inaxes
-        # 计算放大缩小后， xlim 和ylim
-        if axtemp:
-            x_min, x_max = axtemp.get_xlim()
-            y_min, y_max = axtemp.get_ylim()
-            w = x_max - x_min
-            h = y_max - y_min
-            curx = event.xdata
-            cury = event.ydata
-            curXposition = (curx - x_min) / w
-            curYposition = (cury - y_min) / h
-            if event.button == 'down':
-                w *= 1.1
-                h *= 1.1
-            elif event.button == 'up':
-                w /= 1.1
-                h /= 1.1
-            # print(curXposition, curYposition)
-            newx = curx - w * curXposition
-            newy = cury - h * curYposition
-            axtemp.set(xlim=(newx, newx + w))
-            axtemp.set(ylim=(newy, newy + h))
-            self.fig.canvas.draw_idle()  # 绘图动作实时反映在图像上
+            try:
+                with shelve.open(self.shelf_file) as s:
+                    s['Pressure'] = self.y
+                    s['Time'] = time.strftime("%Y-%m-%d %H:%M:%S", self.time)
+                self.show_data()
+                time.sleep(0.3)
+                self.zip_folder(self.folder_name, self.folder_name + '.axyz')
+            except Exception as e:
+                logger.error(e)
+                messagebox.showerror("错误", "写入数据失败")
+                self.btn_open_click()
 
     def show_data(self):
-        self.IntVarpressure.set(int(self.y[0]))
+        self.IntVarpressure.set(int(self.get_pressure()))
 
     def btn_read_click(self):
         folder_name = filedialog.askdirectory()
@@ -430,44 +422,60 @@ class Widgets(tk.Tk):
         if folder_name == '':
             messagebox.showerror("错误", "请选择文件")
             return
-
         with shelve.open(shelf_file) as s:
-            self.Tank_ID.delete(0, tk.END)
-            self.Tank_ID.insert(0, s['Tank_ID'])
-            self.Test_ID.delete(0, tk.END)
-            self.Test_ID.insert(0, s['Test_ID'])
-            self.Temp_Val.delete(0, tk.END)
-            self.Temp_Val.insert(0, s['Temp_Val'])
-            self.Pressure_val1.set(s['Pressure_val1'])
-            self.Pressure_val2.set(s['Pressure_val2'])
-            self.Pressure_val3.set(s['Pressure_val3'])
-            self.Pressure_val4.set(s['Pressure_val4'])
+            self.Process_Val.set(s['Process_Val'])
+            self.Test_ID.set(s['Test_ID'])
+            self.Temp_val.set(s['Temp_val'])
+            self.Tank_ID1.set(s['Tank_ID1'])
+            self.Tank_ID2.set(s['Tank_ID2'])
+            self.Tank_ID3.set(s['Tank_ID3'])
+            self.Tank_ID4.set(s['Tank_ID4'])
+            self.Holding_time.set(s['Holding_time'])
+
             pressure = s['Pressure']
+            self.add_text_outside_axes(0, 0.9, 'Process_Val: ' + str(s['Process_Val']))
+            self.add_text_outside_axes(0, 0.8, 'Test_ID: ' + str(s['Test_ID']))
+            self.add_text_outside_axes(0, 0.7, 'Temp_val: ' + str(s['Temp_val']))
+            self.add_text_outside_axes(0, 0.6, 'Tank_ID1: ' + str(s['Tank_ID1']))
+            self.add_text_outside_axes(0, 0.5, 'Tank_ID2: ' + str(s['Tank_ID2']))
+            self.add_text_outside_axes(0, 0.4, 'Tank_ID4: ' + str(s['Tank_ID4']))
+            self.add_text_outside_axes(0, 0.3, 'Tank_ID4: ' + str(s['Tank_ID4']))
+            self.add_text_outside_axes(0, 0.2, 'Holding_time: ' + str(s['Holding_time']))
+            self.add_text_outside_axes(0, 0.1, 'Time: ' + s['Time'])
+
         self.ax.clear()
         self.ax.plot(pressure)
         self.fig.canvas.draw_idle()
+        messagebox.showinfo('信息', '读取成功！')
 
     def btn_write_click(self):
-        """
 
-        :return:
-        """
-        if self.Tank_ID.get() == '' or self.Test_ID.get() == '' or self.Temp_Val.get() == '' or self.Pressure_val1.get() == '' or self.Pressure_val2.get() == '' or self.Pressure_val3.get() == '' or self.Pressure_val4.get() == '':
+        if self.Temp_val.get() == '' or self.Tank_ID1.get() == '' or self.Tank_ID2.get() == '' or self.Tank_ID4.get() == '' or self.Tank_ID4.get() == '':
             messagebox.showerror("错误", "请输入完整信息")
             return
-
         folder_name = filedialog.askdirectory()
         shelf_file = os.path.join(folder_name, 'shelf')
+
         with shelve.open(shelf_file) as s:
-            s['Tank_ID'] = self.Tank_ID.get()
-            s['Test_ID'] = self.Test_ID.get()
-            s['Temp_Val'] = self.Temp_Val.get()
-            s['Pressure_val1'] = self.Pressure_val1.get()
-            s['Pressure_val2'] = self.Pressure_val2.get()
-            s['Pressure_val3'] = self.Pressure_val3.get()
-            s['Pressure_val4'] = self.Pressure_val4.get()
-        with zipfile.ZipFile(folder_name + '.zip', 'w') as z:
-            z.write(shelf_file)
+            s['Process_Val'] = self.Process_Val.get()
+            s['Test_ID'] = str(self.Test_ID.get())
+            s['Temp_val'] = self.Temp_val.get()
+            s['Tank_ID1'] = self.Tank_ID1.get()
+            s['Tank_ID2'] = self.Tank_ID2.get()
+            s['Tank_ID3'] = self.Tank_ID3.get()
+            s['Tank_ID4'] = self.Tank_ID4.get()
+            s['Holding_time'] = self.Holding_time.get()
+            self.add_text_outside_axes(0, 0.9, 'Process_Val: ' + str(self.Process_Val.get()))
+            self.add_text_outside_axes(0, 0.8, 'Test_ID: ' + self.Test_ID.get())
+            self.add_text_outside_axes(0, 0.7, 'Temp_val: ' + str(self.Temp_val.get()))
+            self.add_text_outside_axes(0, 0.6, 'Tank_ID1: ' + self.Tank_ID1.get())
+            self.add_text_outside_axes(0, 0.5, 'Tank_ID2: ' + self.Tank_ID2.get())
+            self.add_text_outside_axes(0, 0.4, 'Tank_ID3: ' + self.Tank_ID3.get())
+            self.add_text_outside_axes(0, 0.3, 'Tank_ID4: ' + self.Tank_ID4.get())
+            self.add_text_outside_axes(0, 0.2, 'Holding_time: ' + str(self.Holding_time.get()))
+            self.add_text_outside_axes(0, 0.1, 'Time: ' + time.strftime("%Y-%m-%d %H:%M:%S", self.time))
+        messagebox.showinfo('信息', '写入成功！')
+
     def create_file(self, filename):
         with open(filename, 'a', newline='') as f:
             pass
@@ -475,28 +483,30 @@ class Widgets(tk.Tk):
     def get_pressure(self):
         return random.randint(0, 10)
 
+    def floder_generate(self):
+        if self.Test_ID.get() == '':
+            messagebox.showerror("错误", "请输入记录编号")
+            return
+        self.folder_name = filedialog.askdirectory() + "/" + time.strftime("%Y%m%d_",
+                                                                           self.open_time) + self.Test_ID.get()
+        if not os.path.exists(self.folder_name):
+            os.mkdir(self.folder_name)
+        self.shelf_file = os.path.join(self.folder_name, 'shelf')
+
     def btn_open_click(self):
         """
 
         """
         if self.is_open:
             self.is_open = False
-            self.strvDevCtrl.set("打开")
-            try:
-                with shelve.open(self.shelf_file) as s:
-                    s['Pressure'] = self.y
-                    s['Time'] = time.strftime("%Y-%m-%d %H:%M:%S", self.time)
-                with zipfile.ZipFile(self.shelf_file + '.zip', 'w') as z:
-                     z.write(self.shelf_file)
-            except Exception as e:
-                logger.error(e)
-                messagebox.showerror("错误", "写入数据失败")
-                self.btn_open_click()
+            self.strvDevCtrl.set("开始记录")
         else:
-            self.is_open = True
-            self.strvDevCtrl.set("关闭")
             try:
+                self.floder_generate()
+                self.is_open = True
+                self.strvDevCtrl.set("停止记录")
                 self.start_thread()
+                messagebox.showinfo('信息', '启动成功！')
             except Exception as e:
                 logger.error(e)
                 messagebox.showerror("错误", "启动失败")
@@ -509,6 +519,11 @@ class Widgets(tk.Tk):
 
     def btn_3_click(self):
         self._set_btn_(self.btnPressureWaterCtrl, self.strvPressureWaterCtrl, 2)
+
+    def btn_save_click(self):
+        filename = filedialog.asksaveasfilename(defaultextension=".png")
+        if filename:
+            self.fig.savefig(filename)
 
     def _set_btn_(self, btn, btn_string, num):
         if self.btn_is_open[num]:
