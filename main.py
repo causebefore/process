@@ -36,7 +36,7 @@ class SerialPort:
     def get_port(self):
         self.port_list = list(serial.tools.list_ports.comports())
         if len(self.port_list) == 0:
-            return None
+            return []
         return self.port_list
 
     @logger.catch
