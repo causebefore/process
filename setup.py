@@ -1,33 +1,129 @@
-# coding:utf-8
 from distutils.core import setup
-from Cython.Build import cythonize
+from distutils.extension import Extension
+from Cython.Distutils import build_ext
+import shutil
 import os
-
-'''
-该文件的执行需要的在Terminal中输入  python setup.py build_ext --inplace
-使用Cpython 编译python文件，关键函数编译成pyd文件（相当于dll）
-'''
-# 针对多文件情况设置，单文件就只写一个就行, 文件之间用逗号隔开
-key_funs = ['main.py']
+import time
 
 
-
-setup(
-    name="XX app",
-    ext_modules=cythonize(key_funs),
-)
-
-
-
-'''
-1、将编译后的pyd文件的命名更改成与原py文件一致
-2、删除编译后得到的c文件和原py文件
-'''
+# python setup.py build_ext --inplace
+arg = ''
+print('---------------------------------------------------')
+print('开始打包')
+print('---------------------------------------------------')
+print('请输入打包的模式：')
+state = input('1.只在dist中产生一个exe文件\n2.打包为exe文件+依赖文件夹\n')
+if state == '1':
+    arg += '-F'
+state = input('是否隐藏命令行窗口：\n1.隐藏\n2.不隐藏\n')
+if state == '1':
+    arg += ' -w'
 
 
 
+stop_line = 'DEBUG = True\n'
+change_line = 'DEBUG = False\n'
 
-print("——————", os.getcwd(), "——————")
+t1 = time.time()
 
-files = os.listdir(os.getcwd())
-print(files)
+# 创建setup文件夹
+if not os.path.exists('setup'):
+    os.makedirs('setup')
+else:
+    shutil.rmtree('setup')
+    os.makedirs('setup')
+print('---------------------------------------------------')
+print('创建setup文件夹')
+print('---------------------------------------------------')
+
+try:
+    with open('main.py', 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        for i, line in enumerate(lines):
+            if i>50:
+                print('error')
+                os._exit(0)
+            if line.startswith(stop_line):
+                lines[i] = change_line
+                break
+    with open('main.py', 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+
+    import_dir = []
+    for i in range(i):
+        print(lines[i])
+        import_dir.append(lines[i])
+
+
+    import_dir.append('from main import main\n')
+    import_dir.append('\n')
+    import_dir.append('if __name__ == \'__main__\':\n')
+    import_dir.append('    main()\n')
+    print('---------------------------------------------------')
+    print('创建pack.py文件')
+    print('---------------------------------------------------')
+    with open('setup/pack.py', 'w', encoding='utf-8') as f:
+        f.writelines(import_dir)
+
+    print('---------------------------------------------------')
+    print('开始编译main.py')
+    print('---------------------------------------------------')
+    # 编译main.py为pyd文件
+    ext_modules = [Extension('main', ['main.py'])]
+    setup(
+        cmdclass={'build_ext': build_ext},
+        ext_modules=ext_modules
+    )
+
+    # 查找编译后的pyd文件
+    for root, dirs, files in os.walk(os.getcwd()):
+        for file in files:
+            if file.endswith('.pyd'):
+                print(os.path.join(root, file))
+                # 重命名pyd文件
+                os.rename(os.path.join(root, file), os.path.join(root, 'main.pyd'))
+                # 移动pyd文件到setup文件夹
+                shutil.move(os.path.join(root, 'main.pyd'), os.path.join('setup', 'main.pyd'))
+                break
+
+
+
+
+    with open('main.py', 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        for i, line in enumerate(lines):
+            if line.startswith(change_line):
+                lines[i] = stop_line
+                break
+    with open('main.py', 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+
+    print('---------------------------------------------------')
+    print('开始打包')
+    print('---------------------------------------------------')
+    #使用pyinstaller打包
+    os.system('pyinstaller ' + arg + ' main.py')
+    # 删除spec文件
+    os.remove('main.spec')
+    #删除.c文件
+    os.remove('main.c')
+    #删除build文件夹
+    shutil.rmtree('build')
+
+    #压缩dist文件夹
+    shutil.make_archive('dist', 'zip', 'dist')
+    t2 = time.time()
+    print('---------------------------------------------------')
+    print('打包成功')
+    print(('用时：%.2f s') % (t2 - t1))
+except Exception as e:
+
+    with open('main.py', 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        for i, line in enumerate(lines):
+            if line.startswith(change_line):
+                lines[i] = stop_line
+                break
+    with open('main.py', 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    shutil.rmtree('build')

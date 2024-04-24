@@ -10,13 +10,14 @@ import os
 import matplotlib.pyplot as plt
 import random
 import shelve
-PATH = os.getcwd()
 import serial.tools.list_ports
 from pymodbus.client import ModbusSerialClient
 from zipfile import ZipFile
 import os
 
 DEBUG = True
+PATH = os.getcwd()
+
 
 logger.add("log.log", rotation="1 week", retention="10 days", level="INFO")
 
