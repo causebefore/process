@@ -5,21 +5,22 @@ import shutil
 import os
 import time
 
-
 # python setup.py build_ext --inplace
 arg = ''
 print('---------------------------------------------------')
 print('开始打包')
 print('---------------------------------------------------')
 print('请输入打包的模式：')
-state = input('1.只在dist中产生一个exe文件\n2.打包为exe文件+依赖文件夹\n')
+state = input('是否打包为一个文件：\n1.是\n2.否\n')
 if state == '1':
     arg += '-F'
 state = input('是否隐藏命令行窗口：\n1.隐藏\n2.不隐藏\n')
 if state == '1':
     arg += ' -w'
-
-
+state = input('是否使用图标：\n1.使用\n2.不使用\n')
+if state == '1':
+    icon = input('请输入图标的路径：')
+    arg += ' -i=' + icon
 
 stop_line = 'DEBUG = True\n'
 change_line = 'DEBUG = False\n'
@@ -40,7 +41,7 @@ try:
     with open('main.py', 'r', encoding='utf-8') as f:
         lines = f.readlines()
         for i, line in enumerate(lines):
-            if i>50:
+            if i > 50:
                 print('error')
                 os._exit(0)
             if line.startswith(stop_line):
@@ -53,7 +54,6 @@ try:
     for i in range(i):
         print(lines[i])
         import_dir.append(lines[i])
-
 
     import_dir.append('from main import main\n')
     import_dir.append('\n')
@@ -86,10 +86,7 @@ try:
                 shutil.move(os.path.join(root, 'main.pyd'), os.path.join('setup', 'main.pyd'))
                 break
 
-
-
-
-    with open('main.py', 'r', encoding='utf-8') as f:
+    with open('main.py', encoding='utf-8') as f:
         lines = f.readlines()
         for i, line in enumerate(lines):
             if line.startswith(change_line):
@@ -115,7 +112,7 @@ try:
     t2 = time.time()
     print('---------------------------------------------------')
     print('打包成功')
-    print(('用时：%.2f s') % (t2 - t1))
+    print('用时：%.2f s' % (t2 - t1))
 except Exception as e:
 
     with open('main.py', 'r', encoding='utf-8') as f:

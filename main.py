@@ -8,17 +8,22 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from loguru import logger
 import os
 import matplotlib.pyplot as plt
-import random
 import shelve
 import serial.tools.list_ports
 from pymodbus.client import ModbusSerialClient
-from zipfile import ZipFile
 import os
+
+
+
 
 DEBUG = True
 PATH = os.getcwd()
 
+# setup.py import line
 
+
+version = "1.0.6"
+email = 'lbqdlbq08@outlook.com'
 logger.add("log.log", rotation="1 week", retention="10 days", level="INFO")
 
 
@@ -33,6 +38,7 @@ class SerialPort:
         self.ser.parity = "N"
         self.data_queue = queue.Queue()
         self.port_list = []
+        self.read_error = False
 
     def get_port(self):
         self.port_list = list(serial.tools.list_ports.comports())
@@ -51,30 +57,31 @@ class SerialPort:
         except:
             raise Exception("连接失败")
 
-    def disconnect(self):
-        self.client.disconnect()
-
-    @logger.catch
+    # @logger.catch
     def read_modbus_rtu(self, slave_id=1, addr=0x004, count=1):
         logger.info("读取数据")
-        result = self.client.read_holding_registers(addr, count, unit=slave_id)
-        if result.isError():
+        self.result = self.client.read_holding_registers(address=addr, count=count, slave=slave_id)
+        if self.result.isError():
+            self.read_error =True
             return 0
         else:
-            return result.registers[0]
+            self.read_error = False
+            logger.debug( (self.result.registers[0]))
+            return self.result.registers[0]
 
-    def get_data(self):
-        return self.data_queue.get()
+    def is_error(self):
+        return self.read_error
 
 
 class MouseBinding:
     """
 
     """
+
     def __init__(self, ax, fig):
         self.ax = ax
         self.fig = fig
-        print('init')
+        logger.debug('init')
         self.scroll = self.ax.figure.canvas.mpl_connect('scroll_event', self.call_scroll)
         self.cidpress = self.ax.figure.canvas.mpl_connect('button_press_event', self.on_press)
         self.cidrelease = self.ax.figure.canvas.mpl_connect('button_release_event', self.on_release)
@@ -174,7 +181,7 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
         self.strvTime = None
         self.thread = None
         self.process_data = []
-        self.title("串口调试助手")
+        self.title("压力测试系统 " +version+' Email:'+email)
         self.geometry("1600x1000")
         self.resizable(False, False)
         self.open_time = time.localtime()
@@ -215,13 +222,14 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
         self.fig.subplots_adjust(left=0.15, right=0.99, bottom=0.1, top=0.95, wspace=0.2, hspace=0.2)
 
         self.line, = self.ax.plot(self.x, self.y)
-        self.ax.grid(True)  # 显示网格
+        # self.ax.grid(True)  # 显示网格
         self.ax.set_title('Pressure vs Time')
         self.ax.set_xlabel('Time (s)')
         self.ax.set_ylabel('Pressure (Pa)')
         self.ax.fill_between(self.x, self.y, 100, color='white')
         self.ax.set_xlim(0, 150)
         self.ax.set_ylim(0, 10)
+
         # 将图形添加到tkinter窗口
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.gbGraph)  # A tk.DrawingArea.
         self.canvas.draw()  # 显示图形
@@ -252,10 +260,10 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
         # CopyRight Frame
         self.gbDevCopyRight = tk.LabelFrame(self._dev_frame, height=100, width=200, text="版权信息")
         self.gbDevCopyRight.grid_propagate(True)
-        # self.gbDevCopyRight.grid(row=1, column=0, padx=2, sticky=tk.NW)
+        # self.gbDevCopyRight.grid(row=1, column=0, sticky=tk.NW)
         tk.Label(self.gbDevCopyRight, anchor=tk.NW, text="Author: Liu Bingqian").grid(row=2, column=0, sticky=tk.NW)
-        tk.Label(self.gbDevCopyRight, anchor=tk.NW, text="Email: lbq08@foxmail.com").grid(row=3, column=0, sticky=tk.NW)
-        tk.Label(self.gbDevCopyRight, anchor=tk.NW, text="Version: 1.0.6").grid(row=4, column=0, sticky=tk.NW)
+        tk.Label(self.gbDevCopyRight, anchor=tk.NW, text="Email: "+email).grid(row=3, column=0, sticky=tk.NW)
+        tk.Label(self.gbDevCopyRight, anchor=tk.NW, text="Version: "+version).grid(row=4, column=0, sticky=tk.NW)
         # Time Label
         self.strvTime = tk.StringVar()
         tk.Label(self.gbDevCopyRight, anchor=tk.NW, textvariable=self.strvTime).grid(row=5, column=0, sticky=tk.NW)
@@ -274,11 +282,7 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
         tk.Label(self.gbData, anchor=tk.NW, textvariable=self.IntVarpressure, width=3, font=self.font_1).grid(row=0,
                                                                                                               column=1,
                                                                                                               sticky=tk.NW)
-        # self.IntVartemp = tk.DoubleVar()
-        # self.IntVartemp.set(0)
-        # tk.Label(self.gbData, anchor=tk.NW, text="温度值:", font=self.font_1).grid(row=1, column=0, sticky=tk.NW)
-        # tk.Label(self.gbData, anchor=tk.NW, textvariable=self.IntVartemp, font=self.font_1).grid(row=1, column=1,
-        #                                                                                          sticky=tk.NW)
+
 
     def btn_frame_start(self):
         """
@@ -286,8 +290,8 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
         """
         self.gbBtn = tk.LabelFrame(self._dev_frame, height=100, width=200, text="按钮")
         # TODO 增加按钮
-        # self.gbBtn.grid_propagate(True)
-        # self.gbBtn.grid(row=0, column=2, sticky=tk.NW)
+        self.gbBtn.grid_propagate(True)
+        self.gbBtn.grid(row=0, column=2, sticky=tk.NW)
 
         tk.Label(self.gbBtn, anchor=tk.NW, text="泄压阀控制", font=self.font_1).grid(row=0, column=0, sticky=tk.NW)
         tk.Label(self.gbBtn, anchor=tk.NW, text="高压泵控制", font=self.font_1).grid(row=1, column=0, sticky=tk.NW)
@@ -412,6 +416,9 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
                 break
             try:
                 pressure = self.get_pressure()  # 获取压力数据
+                pressure = 2
+                if self.is_error():
+                    raise Exception("读取数据失败")
                 self.IntVarpressure.set(pressure)
                 self.y.append(pressure)
                 self.x.append(len(self.y))
@@ -424,13 +431,16 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
                 logger.error(e)
                 self.btn_open_click()
                 messagebox.showerror("错误", "写入数据失败")
-                raise Exception("获取数据失败")
-            time.sleep(1)
+            time.sleep(0.5)
 
     @logger.catch
     def btn_read_click(self):
         folder_name = filedialog.askdirectory()
         shelf_file = os.path.join(folder_name, 'shelf')
+
+        if self.is_open:
+            messagebox.showerror("错误", "请先停止记录")
+            return
         if folder_name == '':
             messagebox.showerror("错误", "请选择文件")
             return
@@ -492,12 +502,10 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
         logger.info(self.folder_name)
         messagebox.showinfo('信息', '写入成功！')
 
-
-
     @logger.catch
     def get_pressure(self):
-        # self.read_modbus_rtu()
-        return random.randint(0, 10)
+
+        return self.read_modbus_rtu()
 
     def floder_generate(self):
         try:
@@ -522,8 +530,7 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
                 if self.Test_ID.get() == '':
                     messagebox.showerror("错误", "请输入记录编号")
                     return
-                # self.floder_generate()
-                self.connect(self.cmbDevType.get(), 115200, 1, "N", 8)
+                self.connect(self.cmbDevType.get(), 9600, 1, "N", 8)
                 self.is_open = True
                 self.strvDevCtrl.set("停止记录")
                 self.start_thread()
