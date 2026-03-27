@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import shelve
 import serial.tools.list_ports
 from pymodbus.client import ModbusSerialClient
-import os
 
 
 
@@ -54,19 +53,19 @@ class SerialPort:
                                              parity=parity,
                                              bytesize=bytesize)
             self.client.connect()
-        except:
-            raise Exception("连接失败")
+        except Exception as e:
+            raise Exception(f"连接失败: {e}")
 
     # @logger.catch
     def read_modbus_rtu(self, slave_id=1, addr=0x004, count=1):
         logger.info("读取数据")
         self.result = self.client.read_holding_registers(address=addr, count=count, slave=slave_id)
         if self.result.isError():
-            self.read_error =True
+            self.read_error = True
             return 0
         else:
             self.read_error = False
-            logger.debug( (self.result.registers[0]))
+            logger.debug(self.result.registers[0])
             return self.result.registers[0]
 
     def is_error(self):
@@ -159,7 +158,7 @@ class MouseBinding:
             self.fig.canvas.draw_idle()  # 绘图动作实时反映在图像上
 
 
-class shelve_file:
+class ShelveFile:
     def __init__(self, shelf_file):
         self.shelf_file = shelf_file
 
@@ -199,7 +198,7 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
         """
         生成窗口部件
         """
-        tk.Tk.protocol(self, 'WM_DELETE_WINDOW', self.quit)
+        tk.Tk.protocol(self, 'WM_DELETE_WINDOW', self.on_closing)
         self._dev_frame = tk.Frame(self)
         self._dev_frame.grid(row=0, column=0, sticky=tk.NW)
         self.graph_frame_start()
@@ -271,7 +270,7 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
 
     def data_frame_start(self):
         """
-
+        实时数据显示框架
         """
         self.gbData = tk.LabelFrame(self._dev_frame, text="实时值")
         self.gbData.grid_propagate(True)
@@ -283,15 +282,13 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
                                                                                                               column=1,
                                                                                                               sticky=tk.NW)
 
-
     def btn_frame_start(self):
         """
-
+        按钮控制框架
         """
         self.gbBtn = tk.LabelFrame(self._dev_frame, height=100, width=200, text="按钮")
-        # TODO 增加按钮
         self.gbBtn.grid_propagate(True)
-        self.gbBtn.grid(row=0, column=2, sticky=tk.NW)
+        self.gbBtn.grid(row=0, column=3, sticky=tk.NW)
 
         tk.Label(self.gbBtn, anchor=tk.NW, text="泄压阀控制", font=self.font_1).grid(row=0, column=0, sticky=tk.NW)
         tk.Label(self.gbBtn, anchor=tk.NW, text="高压泵控制", font=self.font_1).grid(row=1, column=0, sticky=tk.NW)
@@ -401,36 +398,41 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
 
     def stop_thread(self):
         """
-        停止表格线程
+        停止数据采集线程
         """
-        pass
+        self.is_open = False
+
+    def _update_gui_pressure(self, pressure):
+        """在主线程中更新压力相关的 GUI 控件"""
+        self.IntVarpressure.set(pressure)
+        self.y.append(pressure)
+        self.x.append(len(self.y))
+        self.line.set_xdata(self.x)
+        self.line.set_ydata(self.y)
+        self.fig.canvas.draw_idle()
+
+    def _handle_thread_error(self, error_msg):
+        """在主线程中处理采集线程错误"""
+        logger.error(error_msg)
+        self.stop_thread()
+        self.strvDevCtrl.set("开始记录")
+        messagebox.showerror("错误", "读取数据失败")
 
     @logger.catch
     def pressure_frame_thread(self):
         """
-
+        数据采集线程：循环读取压力传感器数据
         """
-        # 获取压力数据并更新图形
-        while True:
-            if not self.is_open:
-                break
+        while self.is_open:
             try:
-                pressure = self.get_pressure()  # 获取压力数据
-                pressure = 2
+                pressure = self.get_pressure()
                 if self.is_error():
                     raise Exception("读取数据失败")
-                self.IntVarpressure.set(pressure)
-                self.y.append(pressure)
-                self.x.append(len(self.y))
-                self.line.set_xdata(self.x)
-                self.line.set_ydata(self.y)
-                self.fig.canvas.draw_idle()
-                # 更新图形
+                # 通过 after() 将 GUI 更新调度回主线程
+                self.after(0, self._update_gui_pressure, pressure)
             except Exception as e:
-                self.stop_thread()
-                logger.error(e)
-                self.btn_open_click()
-                messagebox.showerror("错误", "写入数据失败")
+                self.after(0, self._handle_thread_error, str(e))
+                break
             time.sleep(0.5)
 
     @logger.catch
@@ -472,11 +474,11 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
 
     @logger.catch
     def btn_write_click(self):
-
-        if self.Temp_val.get() == '' or self.Tank_ID1.get() == '' or self.Tank_ID2.get() == '' or self.Tank_ID4.get() == '' or self.Tank_ID4.get() == '':
+        if (self.Tank_ID1.get() == '' or self.Tank_ID2.get() == ''
+                or self.Tank_ID3.get() == '' or self.Tank_ID4.get() == ''):
             messagebox.showerror("错误", "请输入完整信息")
             return
-        self.floder_generate()
+        self.folder_generate()
         # writeback
         with shelve.open(self.shelf_file) as s:
             s['Pressure'] = self.y
@@ -507,15 +509,15 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
 
         return self.read_modbus_rtu()
 
-    def floder_generate(self):
+    def folder_generate(self):
         try:
             self.folder_name = filedialog.askdirectory() + "/" + time.strftime("%Y%m%d_",
                                                                                self.open_time) + self.Test_ID.get()
             if not os.path.exists(self.folder_name):
                 os.mkdir(self.folder_name)
             self.shelf_file = os.path.join(self.folder_name, 'shelf')
-        except:
-            raise Exception("文件夹生成失败")
+        except Exception as e:
+            raise Exception(f"文件夹生成失败: {e}")
 
     @logger.catch
     def btn_open_click(self):
@@ -562,6 +564,13 @@ class Widgets(tk.Tk, MouseBinding, SerialPort):
             btn['bg'] = 'red'
             self.btn_is_open[num] = True
             btn_string.set("关闭")
+
+    def on_closing(self):
+        """窗口关闭回调：安全停止线程后销毁窗口"""
+        self.is_open = False
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=2)
+        self.destroy()
 
 
 def main():

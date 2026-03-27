@@ -1,8 +1,8 @@
-from distutils.core import setup
-from distutils.extension import Extension
+from setuptools import setup, Extension
 from Cython.Distutils import build_ext
 import shutil
 import os
+import sys
 import time
 
 # python setup.py build_ext --inplace
@@ -42,8 +42,8 @@ try:
         lines = f.readlines()
         for i, line in enumerate(lines):
             if i > 50:
-                print('error')
-                os._exit(0)
+                print('error: 未在前50行找到 DEBUG 标志')
+                sys.exit(1)
             if line.startswith(stop_line):
                 lines[i] = change_line
                 break
